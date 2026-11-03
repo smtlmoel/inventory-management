@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -9,7 +10,7 @@ from mock_data import inventory_items, orders, demand_forecasts, backlog_items, 
 
 app = FastAPI(title="Factory Inventory Management System")
 
-# The default 422 body echoes the rejected input, and a JSON `Infinity` makes that body unserializable (500)
+# Replaces FastAPI's default 422 body app-wide: it echoes the rejected input, and a JSON `Infinity` makes that body unserializable (500)
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError):
     errors = [{k: v for k, v in e.items() if k not in ("input", "ctx")} for e in exc.errors()]
@@ -182,6 +183,23 @@ TREND_WEIGHTS = {"increasing": 3, "stable": 2, "decreasing": 1}
 def compute_shortfall(forecast: dict) -> int:
     return max(0, forecast["forecasted_demand"] - forecast["current_stock"])
 
+def open_shortfall(forecast: dict) -> int:
+    """Forecast shortfall minus quantities already on submitted restocking orders"""
+    ordered = sum(
+        line["quantity"]
+        for order in submitted_orders
+        for line in order["items"]
+        if line["item_sku"] == forecast["item_sku"]
+    )
+    return max(0, compute_shortfall(forecast) - ordered)
+
+def to_cents(amount: float) -> int:
+    return round(amount * 100)
+
+def budget_to_cents(budget: float) -> int:
+    # Floor so a recommendation never costs more than the budget; the epsilon absorbs float noise like 0.29 * 100
+    return math.floor(budget * 100 + 1e-6)
+
 # API endpoints
 @app.get("/")
 def root():
@@ -236,20 +254,20 @@ def get_demand_forecasts():
 @app.get("/api/restocking/recommendations", response_model=RestockRecommendationResponse)
 def get_restocking_recommendations(budget: float = Query(0, ge=0, le=MAX_BUDGET, allow_inf_nan=False)):
     """Recommend items to restock within a budget, prioritised by weighted forecast shortfall"""
-    candidates = [f for f in demand_forecasts if compute_shortfall(f) > 0]
-    max_budget = round(sum(compute_shortfall(f) * f["unit_cost"] for f in candidates), 2)
+    candidates = [(f, open_shortfall(f)) for f in demand_forecasts]
+    candidates = [(f, shortfall) for f, shortfall in candidates if shortfall > 0]
+    max_budget = sum(shortfall * to_cents(f["unit_cost"]) for f, shortfall in candidates) / 100
 
     candidates.sort(
-        key=lambda f: compute_shortfall(f) * TREND_WEIGHTS.get(f["trend"], 1),
+        key=lambda c: c[1] * TREND_WEIGHTS.get(c[0]["trend"], 1),
         reverse=True,
     )
 
     # Integer cents keep the greedy allocation exact; float remainders can lose a unit
-    remaining_cents = round(budget * 100)
+    remaining_cents = budget_to_cents(budget)
     recommendations = []
-    for forecast in candidates:
-        shortfall = compute_shortfall(forecast)
-        unit_cents = round(forecast["unit_cost"] * 100)
+    for forecast, shortfall in candidates:
+        unit_cents = to_cents(forecast["unit_cost"])
         qty = min(shortfall, remaining_cents // unit_cents)
         if qty <= 0:
             continue
@@ -296,12 +314,13 @@ def submit_restocking_order(request: SubmitRestockRequest):
             "item_name": forecast["item_name"],
             "quantity": line.quantity,
             "unit_cost": forecast["unit_cost"],
-            "line_cost": round(line.quantity * forecast["unit_cost"], 2),
+            "line_cost": line.quantity * to_cents(forecast["unit_cost"]) / 100,
             "lead_time_days": forecast["lead_time_days"],
         })
 
-    total_cost = round(sum(l["line_cost"] for l in lines), 2)
-    if total_cost > request.budget:
+    total_cents = sum(line.quantity * to_cents(forecasts_by_sku[line.item_sku]["unit_cost"]) for line in request.items)
+    total_cost = total_cents / 100
+    if total_cents > budget_to_cents(request.budget):
         raise HTTPException(
             status_code=400,
             detail=f"Order total {total_cost} exceeds budget {request.budget}",

@@ -31,7 +31,8 @@
         <div class="card-header">
           <h3 id="submitted-orders-title" class="card-title">{{ t('orders.submittedTitle') }} ({{ submittedOrders.length }})</h3>
         </div>
-        <p v-if="submittedOrders.length === 0" class="submitted-empty">{{ t('orders.submittedEmpty') }}</p>
+        <div v-if="submittedError" class="error" role="alert">{{ t('orders.submittedLoadError') }}</div>
+        <p v-else-if="submittedOrders.length === 0" class="submitted-empty">{{ t('orders.submittedEmpty') }}</p>
         <div v-else class="table-container">
           <table>
             <thead>
@@ -128,6 +129,7 @@ export default {
     const error = ref(null)
     const orders = ref([])
     const submittedOrders = ref([])
+    const submittedError = ref(false)
 
     // Use shared filters
     const {
@@ -191,7 +193,9 @@ export default {
     const loadSubmittedOrders = async () => {
       try {
         submittedOrders.value = await api.getSubmittedOrders()
+        submittedError.value = false
       } catch (err) {
+        submittedError.value = true
         console.error('Failed to load submitted orders:', err)
       }
     }
@@ -207,6 +211,7 @@ export default {
       error,
       orders,
       submittedOrders,
+      submittedError,
       currentCurrency,
       formatCurrency,
       getOrdersByStatus,

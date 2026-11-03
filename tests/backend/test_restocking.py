@@ -117,15 +117,67 @@ class TestRestockingRecommendations:
         response = client.get(f"/api/restocking/recommendations?budget={budget}")
         assert response.status_code == 422
 
-    def test_budget_exactly_one_unit_cost_funds_one_unit(self, client):
-        """Test that a budget equal to a unit cost is not short a unit through float drift."""
-        forecast = min(
-            (f for f in client.get("/api/demand").json() if f["forecasted_demand"] > f["current_stock"]),
-            key=lambda f: f["unit_cost"],
+    def test_every_prefix_budget_fully_funds_its_items(self, client):
+        """Test that budgets equal to running sums of line costs fund every item up to that point."""
+        full = get_recommendations(client, get_recommendations(client, 0)["max_budget"])["items"]
+        running_cents = 0
+        for index, item in enumerate(full):
+            running_cents += round(item["line_cost"] * 100)
+            data = get_recommendations(client, running_cents / 100)
+            assert [i["recommended_qty"] for i in data["items"][: index + 1]] == [
+                i["recommended_qty"] for i in full[: index + 1]
+            ]
+
+    def test_fractional_budget_is_floored_to_the_cent(self, client):
+        """Test that a budget just under a unit cost does not round up past the budget."""
+        unit_cost = min(
+            f["unit_cost"] for f in client.get("/api/demand").json() if f["forecasted_demand"] > f["current_stock"]
         )
-        data = get_recommendations(client, forecast["unit_cost"])
-        assert data["total_cost"] <= forecast["unit_cost"]
-        assert data["total_cost"] > 0
+        budget = unit_cost - 0.001
+        data = get_recommendations(client, budget)
+        assert data["total_cost"] <= budget
+
+    def test_recommendation_is_accepted_by_submit_with_same_budget(self, client):
+        """Test that a recommended order never exceeds the budget it was computed for."""
+        budget = 18.749
+        data = get_recommendations(client, budget)
+        if not data["items"]:
+            pytest.skip("No item is affordable at this budget")
+        response = client.post(
+            "/api/restocking/orders",
+            json={
+                "budget": budget,
+                "items": [{"item_sku": i["item_sku"], "quantity": i["recommended_qty"]} for i in data["items"]],
+            },
+        )
+        assert response.status_code == 201
+
+    def test_submitted_quantities_reduce_open_shortfall(self, client):
+        """Test that ordering the full recommendation leaves nothing left to recommend."""
+        max_budget = get_recommendations(client, 0)["max_budget"]
+        data = get_recommendations(client, max_budget)
+        response = client.post(
+            "/api/restocking/orders",
+            json={
+                "budget": max_budget,
+                "items": [{"item_sku": i["item_sku"], "quantity": i["recommended_qty"]} for i in data["items"]],
+            },
+        )
+        assert response.status_code == 201
+        after = get_recommendations(client, max_budget)
+        assert after["items"] == []
+        assert after["max_budget"] == 0
+
+    def test_partial_order_leaves_remaining_shortfall(self, client):
+        """Test that a partial order reduces only the ordered item's shortfall by the ordered quantity."""
+        max_budget = get_recommendations(client, 0)["max_budget"]
+        first = get_recommendations(client, max_budget)["items"][0]
+        client.post(
+            "/api/restocking/orders",
+            json={"budget": max_budget, "items": [{"item_sku": first["item_sku"], "quantity": 1}]},
+        )
+        after = {i["item_sku"]: i for i in get_recommendations(client, max_budget)["items"]}
+        assert after[first["item_sku"]]["shortfall"] == first["shortfall"] - 1
 
 
 class TestRestockingOrders:

@@ -54,7 +54,7 @@ npm install && npm run dev
 - `GET /api/dashboard/summary` - All filters
 - `GET /api/demand`, `/api/backlog` - No filters
 - `GET /api/spending/*` - Summary, monthly, categories, transactions
-- `GET /api/restocking/recommendations?budget=` - Budget-limited restock list from the demand forecast
+- `GET /api/restocking/recommendations?budget=` - Budget-limited restock list from the demand forecast, net of quantities already on submitted orders
 - `POST /api/restocking/orders` - Submit a restocking order (in-memory, resets on restart)
 - `GET /api/orders/submitted` - Submitted restocking orders with lead time
 

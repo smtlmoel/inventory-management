@@ -115,6 +115,7 @@ export default {
     quantity: 'Qty',
     submittedTitle: 'Submitted Orders',
     submittedEmpty: 'No restock orders have been submitted yet',
+    submittedLoadError: 'Failed to load submitted orders',
     submittedLeadTime: 'Lead Time',
     submittedDays: '{count} days',
     submittedDate: 'Submitted',
@@ -195,7 +196,6 @@ export default {
     }
   },
 
-  // Filters
   // Restocking
   restocking: {
     title: 'Restocking',
@@ -224,6 +224,7 @@ export default {
     }
   },
 
+  // Filters
   filters: {
     timePeriod: 'Time Period',
     location: 'Location',

@@ -115,6 +115,7 @@ export default {
     quantity: '数量',
     submittedTitle: '発注済み注文',
     submittedEmpty: '発注済みの補充注文はまだありません',
+    submittedLoadError: '発注済み注文の読み込みに失敗しました',
     submittedLeadTime: 'リードタイム',
     submittedDays: '{count}日',
     submittedDate: '発注日',
@@ -195,7 +196,6 @@ export default {
     }
   },
 
-  // Filters
   // Restocking
   restocking: {
     title: '補充発注',
@@ -224,6 +224,7 @@ export default {
     }
   },
 
+  // Filters
   filters: {
     timePeriod: '期間',
     location: '場所',
