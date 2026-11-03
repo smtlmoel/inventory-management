@@ -1,11 +1,19 @@
 from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders, submitted_orders
 
 app = FastAPI(title="Factory Inventory Management System")
+
+# The default 422 body echoes the rejected input, and a JSON `Infinity` makes that body unserializable (500)
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    errors = [{k: v for k, v in e.items() if k not in ("input", "ctx")} for e in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 # Quarter mapping for date filtering
 QUARTER_MAP = {
@@ -140,12 +148,14 @@ class RestockRecommendationResponse(BaseModel):
     total_cost: float
     items: List[RestockRecommendation]
 
+MAX_BUDGET = 1_000_000_000
+
 class RestockOrderLine(BaseModel):
     item_sku: str = Field(min_length=1)
     quantity: int = Field(gt=0)
 
 class SubmitRestockRequest(BaseModel):
-    budget: float = Field(ge=0)
+    budget: float = Field(ge=0, le=MAX_BUDGET, allow_inf_nan=False)
     items: List[RestockOrderLine]
 
 class SubmittedOrderItem(BaseModel):
@@ -224,7 +234,7 @@ def get_demand_forecasts():
     return demand_forecasts
 
 @app.get("/api/restocking/recommendations", response_model=RestockRecommendationResponse)
-def get_restocking_recommendations(budget: float = Query(0, ge=0)):
+def get_restocking_recommendations(budget: float = Query(0, ge=0, le=MAX_BUDGET, allow_inf_nan=False)):
     """Recommend items to restock within a budget, prioritised by weighted forecast shortfall"""
     candidates = [f for f in demand_forecasts if compute_shortfall(f) > 0]
     max_budget = round(sum(compute_shortfall(f) * f["unit_cost"] for f in candidates), 2)
@@ -234,15 +244,17 @@ def get_restocking_recommendations(budget: float = Query(0, ge=0)):
         reverse=True,
     )
 
-    remaining = budget
+    # Integer cents keep the greedy allocation exact; float remainders can lose a unit
+    remaining_cents = round(budget * 100)
     recommendations = []
     for forecast in candidates:
         shortfall = compute_shortfall(forecast)
-        qty = min(shortfall, int(remaining // forecast["unit_cost"]))
+        unit_cents = round(forecast["unit_cost"] * 100)
+        qty = min(shortfall, remaining_cents // unit_cents)
         if qty <= 0:
             continue
-        line_cost = round(qty * forecast["unit_cost"], 2)
-        remaining -= line_cost
+        line_cost = qty * unit_cents / 100
+        remaining_cents -= qty * unit_cents
         recommendations.append({
             "item_sku": forecast["item_sku"],
             "item_name": forecast["item_name"],

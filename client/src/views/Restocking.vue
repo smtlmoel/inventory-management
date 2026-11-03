@@ -131,13 +131,14 @@ export default {
     let debounceTimer = null
     let requestId = 0
 
-    const sliderStep = computed(() => 1)
+    const sliderStep = 1
     const sliderMax = computed(() => Math.ceil(maxBudget.value))
 
     const formatMoney = (amount) => formatCurrency(Number(amount) || 0, currentCurrency.value)
 
     const formatDate = (value) => {
-      const date = new Date(value)
+      const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+      const date = dateOnly ? new Date(+dateOnly[1], +dateOnly[2] - 1, +dateOnly[3]) : new Date(value)
       if (isNaN(date.getTime())) return value
       return date.toLocaleDateString(currentLocale.value === 'ja' ? 'ja-JP' : 'en-US', {
         year: 'numeric',

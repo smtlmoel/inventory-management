@@ -111,6 +111,22 @@ class TestRestockingRecommendations:
         response = client.get("/api/restocking/recommendations?budget=-5")
         assert response.status_code == 422
 
+    @pytest.mark.parametrize("budget", ["inf", "-inf", "nan", "1e308"])
+    def test_non_finite_or_huge_budget_rejected(self, client, budget):
+        """Test that non-finite and overflow-sized budgets return 422 instead of a 500."""
+        response = client.get(f"/api/restocking/recommendations?budget={budget}")
+        assert response.status_code == 422
+
+    def test_budget_exactly_one_unit_cost_funds_one_unit(self, client):
+        """Test that a budget equal to a unit cost is not short a unit through float drift."""
+        forecast = min(
+            (f for f in client.get("/api/demand").json() if f["forecasted_demand"] > f["current_stock"]),
+            key=lambda f: f["unit_cost"],
+        )
+        data = get_recommendations(client, forecast["unit_cost"])
+        assert data["total_cost"] <= forecast["unit_cost"]
+        assert data["total_cost"] > 0
+
 
 class TestRestockingOrders:
     """Test suite for submitting restocking orders."""
@@ -243,5 +259,15 @@ class TestRestockingOrders:
         response = client.post(
             "/api/restocking/orders",
             json={"budget": -1, "items": [{"item_sku": sku, "quantity": 1}]},
+        )
+        assert response.status_code == 422
+
+    def test_reject_infinite_budget(self, client):
+        """Test that an infinite budget fails validation."""
+        sku = client.get("/api/demand").json()[0]["item_sku"]
+        response = client.post(
+            "/api/restocking/orders",
+            content=f'{{"budget": Infinity, "items": [{{"item_sku": "{sku}", "quantity": 1}}]}}',
+            headers={"Content-Type": "application/json"},
         )
         assert response.status_code == 422
