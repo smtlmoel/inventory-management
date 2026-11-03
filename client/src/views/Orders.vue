@@ -27,6 +27,38 @@
         </div>
       </div>
 
+      <section class="card" aria-labelledby="submitted-orders-title">
+        <div class="card-header">
+          <h3 id="submitted-orders-title" class="card-title">{{ t('orders.submittedTitle') }} ({{ submittedOrders.length }})</h3>
+        </div>
+        <div v-if="submittedError" class="error" role="alert">{{ t('orders.submittedLoadError') }}</div>
+        <p v-else-if="submittedOrders.length === 0" class="submitted-empty">{{ t('orders.submittedEmpty') }}</p>
+        <div v-else class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>{{ t('orders.table.orderNumber') }}</th>
+                <th>{{ t('orders.submittedDate') }}</th>
+                <th>{{ t('orders.table.items') }}</th>
+                <th>{{ t('orders.submittedTotal') }}</th>
+                <th>{{ t('orders.submittedLeadTime') }}</th>
+                <th>{{ t('orders.table.expectedDelivery') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="order in submittedOrders" :key="order.id">
+                <td><strong>{{ order.order_number }}</strong></td>
+                <td>{{ formatDate(order.submitted_at) }}</td>
+                <td>{{ order.items.map(i => `${i.item_name} x${i.quantity}`).join(', ') }}</td>
+                <td><strong>{{ formatCurrency(order.total_cost, currentCurrency) }}</strong></td>
+                <td>{{ t('orders.submittedDays', { count: order.lead_time_days }) }}</td>
+                <td>{{ formatDate(order.expected_delivery) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <div class="card">
         <div class="card-header">
           <h3 class="card-title">{{ t('orders.allOrders') }} ({{ orders.length }})</h3>
@@ -83,6 +115,7 @@ import { ref, onMounted, watch, computed } from 'vue'
 import { api } from '../api'
 import { useFilters } from '../composables/useFilters'
 import { useI18n } from '../composables/useI18n'
+import { formatCurrency } from '../utils/currency'
 
 export default {
   name: 'Orders',
@@ -95,6 +128,8 @@ export default {
     const loading = ref(true)
     const error = ref(null)
     const orders = ref([])
+    const submittedOrders = ref([])
+    const submittedError = ref(false)
 
     // Use shared filters
     const {
@@ -146,20 +181,39 @@ export default {
     const formatDate = (dateString) => {
       const { currentLocale } = useI18n()
       const locale = currentLocale.value === 'ja' ? 'ja-JP' : 'en-US'
-      return new Date(dateString).toLocaleDateString(locale, {
+      const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateString)
+      const date = dateOnly ? new Date(+dateOnly[1], +dateOnly[2] - 1, +dateOnly[3]) : new Date(dateString)
+      return date.toLocaleDateString(locale, {
         year: 'numeric',
         month: 'short',
         day: 'numeric'
       })
     }
 
-    onMounted(loadOrders)
+    const loadSubmittedOrders = async () => {
+      try {
+        submittedOrders.value = await api.getSubmittedOrders()
+        submittedError.value = false
+      } catch (err) {
+        submittedError.value = true
+        console.error('Failed to load submitted orders:', err)
+      }
+    }
+
+    onMounted(() => {
+      loadOrders()
+      loadSubmittedOrders()
+    })
 
     return {
       t,
       loading,
       error,
       orders,
+      submittedOrders,
+      submittedError,
+      currentCurrency,
+      formatCurrency,
       getOrdersByStatus,
       getOrderStatusClass,
       formatDate,
@@ -172,6 +226,12 @@ export default {
 </script>
 
 <style scoped>
+.submitted-empty {
+  color: #64748b;
+  font-size: 0.875rem;
+  padding: 0.5rem 0;
+}
+
 /* Fixed table layout to prevent column shifting */
 .orders-table {
   table-layout: fixed;
