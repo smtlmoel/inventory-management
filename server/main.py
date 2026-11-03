@@ -1,8 +1,9 @@
-from fastapi import FastAPI, HTTPException
+from datetime import datetime, timedelta
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
-from pydantic import BaseModel
-from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders
+from pydantic import BaseModel, Field
+from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders, submitted_orders
 
 app = FastAPI(title="Factory Inventory Management System")
 
@@ -89,6 +90,9 @@ class DemandForecast(BaseModel):
     forecasted_demand: int
     trend: str
     period: str
+    unit_cost: float
+    current_stock: int
+    lead_time_days: int
 
 class BacklogItem(BaseModel):
     id: str
@@ -119,6 +123,54 @@ class CreatePurchaseOrderRequest(BaseModel):
     unit_cost: float
     expected_delivery_date: str
     notes: Optional[str] = None
+
+class RestockRecommendation(BaseModel):
+    item_sku: str
+    item_name: str
+    trend: str
+    unit_cost: float
+    shortfall: int
+    recommended_qty: int
+    line_cost: float
+    lead_time_days: int
+
+class RestockRecommendationResponse(BaseModel):
+    budget: float
+    max_budget: float
+    total_cost: float
+    items: List[RestockRecommendation]
+
+class RestockOrderLine(BaseModel):
+    item_sku: str = Field(min_length=1)
+    quantity: int = Field(gt=0)
+
+class SubmitRestockRequest(BaseModel):
+    budget: float = Field(ge=0)
+    items: List[RestockOrderLine]
+
+class SubmittedOrderItem(BaseModel):
+    item_sku: str
+    item_name: str
+    quantity: int
+    unit_cost: float
+    line_cost: float
+    lead_time_days: int
+
+class SubmittedOrder(BaseModel):
+    id: str
+    order_number: str
+    submitted_at: str
+    items: List[SubmittedOrderItem]
+    total_cost: float
+    lead_time_days: int
+    expected_delivery: str
+    status: str
+
+# Higher weight means restocked first when budget is limited
+TREND_WEIGHTS = {"increasing": 3, "stable": 2, "decreasing": 1}
+
+def compute_shortfall(forecast: dict) -> int:
+    return max(0, forecast["forecasted_demand"] - forecast["current_stock"])
 
 # API endpoints
 @app.get("/")
@@ -153,6 +205,11 @@ def get_orders(
     filtered_orders = filter_by_month(filtered_orders, month)
     return filtered_orders
 
+@app.get("/api/orders/submitted", response_model=List[SubmittedOrder])
+def get_submitted_orders():
+    """Get restocking orders submitted via the Restocking tab, newest first"""
+    return list(reversed(submitted_orders))
+
 @app.get("/api/orders/{order_id}", response_model=Order)
 def get_order(order_id: str):
     """Get a specific order"""
@@ -165,6 +222,93 @@ def get_order(order_id: str):
 def get_demand_forecasts():
     """Get demand forecasts"""
     return demand_forecasts
+
+@app.get("/api/restocking/recommendations", response_model=RestockRecommendationResponse)
+def get_restocking_recommendations(budget: float = Query(0, ge=0)):
+    """Recommend items to restock within a budget, prioritised by weighted forecast shortfall"""
+    candidates = [f for f in demand_forecasts if compute_shortfall(f) > 0]
+    max_budget = round(sum(compute_shortfall(f) * f["unit_cost"] for f in candidates), 2)
+
+    candidates.sort(
+        key=lambda f: compute_shortfall(f) * TREND_WEIGHTS.get(f["trend"], 1),
+        reverse=True,
+    )
+
+    remaining = budget
+    recommendations = []
+    for forecast in candidates:
+        shortfall = compute_shortfall(forecast)
+        qty = min(shortfall, int(remaining // forecast["unit_cost"]))
+        if qty <= 0:
+            continue
+        line_cost = round(qty * forecast["unit_cost"], 2)
+        remaining -= line_cost
+        recommendations.append({
+            "item_sku": forecast["item_sku"],
+            "item_name": forecast["item_name"],
+            "trend": forecast["trend"],
+            "unit_cost": forecast["unit_cost"],
+            "shortfall": shortfall,
+            "recommended_qty": qty,
+            "line_cost": line_cost,
+            "lead_time_days": forecast["lead_time_days"],
+        })
+
+    return {
+        "budget": budget,
+        "max_budget": max_budget,
+        "total_cost": round(sum(r["line_cost"] for r in recommendations), 2),
+        "items": recommendations,
+    }
+
+@app.post("/api/restocking/orders", response_model=SubmittedOrder, status_code=201)
+def submit_restocking_order(request: SubmitRestockRequest):
+    """Submit a restocking order; lead time is the longest among its items"""
+    if not request.items:
+        raise HTTPException(status_code=400, detail="Order must contain at least one item")
+
+    skus = [line.item_sku for line in request.items]
+    if len(set(skus)) != len(skus):
+        raise HTTPException(status_code=400, detail="Duplicate SKUs in order")
+
+    forecasts_by_sku = {f["item_sku"]: f for f in demand_forecasts}
+    unknown = [sku for sku in skus if sku not in forecasts_by_sku]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown SKU(s): {', '.join(unknown)}")
+
+    lines = []
+    for line in request.items:
+        forecast = forecasts_by_sku[line.item_sku]
+        lines.append({
+            "item_sku": line.item_sku,
+            "item_name": forecast["item_name"],
+            "quantity": line.quantity,
+            "unit_cost": forecast["unit_cost"],
+            "line_cost": round(line.quantity * forecast["unit_cost"], 2),
+            "lead_time_days": forecast["lead_time_days"],
+        })
+
+    total_cost = round(sum(l["line_cost"] for l in lines), 2)
+    if total_cost > request.budget:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order total {total_cost} exceeds budget {request.budget}",
+        )
+
+    now = datetime.now()
+    lead_time_days = max(l["lead_time_days"] for l in lines)
+    order = {
+        "id": str(len(submitted_orders) + 1),
+        "order_number": f"RST-{len(submitted_orders) + 1:04d}",
+        "submitted_at": now.isoformat(timespec="seconds"),
+        "items": lines,
+        "total_cost": total_cost,
+        "lead_time_days": lead_time_days,
+        "expected_delivery": (now + timedelta(days=lead_time_days)).date().isoformat(),
+        "status": "Submitted",
+    }
+    submitted_orders.append(order)
+    return order
 
 @app.get("/api/backlog", response_model=List[BacklogItem])
 def get_backlog():

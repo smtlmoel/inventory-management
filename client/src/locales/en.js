@@ -6,6 +6,7 @@ export default {
     orders: 'Orders',
     finance: 'Finance',
     demandForecast: 'Demand Forecast',
+    restocking: 'Restocking',
     companyName: 'Catalyst Components',
     subtitle: 'Inventory Management System'
   },
@@ -112,6 +113,12 @@ export default {
     onTimeDelivery: 'On-Time Delivery',
     itemsCount: '{count} items',
     quantity: 'Qty',
+    submittedTitle: 'Submitted Orders',
+    submittedEmpty: 'No restock orders have been submitted yet',
+    submittedLeadTime: 'Lead Time',
+    submittedDays: '{count} days',
+    submittedDate: 'Submitted',
+    submittedTotal: 'Total',
     table: {
       orderNumber: 'Order Number',
       orderId: 'Order ID',
@@ -189,6 +196,34 @@ export default {
   },
 
   // Filters
+  // Restocking
+  restocking: {
+    title: 'Restocking',
+    description: 'Set a budget and review recommended purchases based on forecast demand',
+    budgetLabel: 'Restocking budget',
+    budgetMax: 'Maximum: {max}',
+    recommendationsTitle: 'Recommended Purchases',
+    noItems: 'No items can be purchased at this budget',
+    placeOrder: 'Place Order',
+    placing: 'Placing order...',
+    updating: 'Updating recommendations...',
+    total: 'Total',
+    leadDays: '{count} days',
+    orderPlaced: 'Order {number} placed',
+    orderDetails: 'Total {total}. Lead time {days} days. Expected delivery {date}.',
+    orderFailed: 'Failed to place order',
+    loadFailed: 'Failed to load recommendations',
+    table: {
+      sku: 'SKU',
+      itemName: 'Item',
+      trend: 'Trend',
+      unitCost: 'Unit Cost',
+      quantity: 'Qty',
+      lineCost: 'Line Cost',
+      leadTime: 'Lead Time'
+    }
+  },
+
   filters: {
     timePeriod: 'Time Period',
     location: 'Location',
